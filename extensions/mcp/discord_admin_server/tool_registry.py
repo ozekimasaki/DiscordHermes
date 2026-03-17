@@ -12,10 +12,11 @@ from .models import ToolDefinition
 from .validation import (
     optional_boolean,
     optional_integer,
+    optional_nonempty_snowflake_list,
     optional_permissions,
     optional_snowflake,
-    optional_snowflake_list,
     optional_string,
+    require_integer,
     require_mapping,
     require_snowflake,
     require_string,
@@ -111,8 +112,27 @@ def _schema(properties: dict[str, Any], required: list[str]) -> dict[str, Any]:
     }
 
 
+def _role_update_fields(arguments: dict[str, Any]) -> dict[str, Any]:
+    updates: dict[str, Any] = {}
+    if "name" in arguments:
+        updates["name"] = require_string(arguments, "name")
+    if "permissions" in arguments:
+        updates["permissions"] = optional_permissions(arguments, default=None)
+    if "color" in arguments:
+        updates["color"] = optional_integer(arguments, "color", minimum=0)
+    if "hoist" in arguments:
+        updates["hoist"] = optional_boolean(arguments, "hoist")
+    if "mentionable" in arguments:
+        updates["mentionable"] = optional_boolean(arguments, "mentionable")
+
+    if not updates:
+        raise ValidationError("update_role requires at least one role field to change.")
+
+    return updates
+
+
 def build_tool_registry(service: DiscordAdminService) -> ToolRegistry:
-    """Create the MVP registry for Hermes."""
+    """Create the Discord admin registry for Hermes."""
 
     definitions = [
         ToolDefinition(
@@ -169,6 +189,50 @@ def build_tool_registry(service: DiscordAdminService) -> ToolRegistry:
             ),
         ),
         ToolDefinition(
+            name="list_members",
+            title="List Members",
+            description="List guild members, optionally continuing after a specific member.",
+            input_schema=_schema(
+                {
+                    "guild_id": {"type": "string"},
+                    "limit": {"type": "integer", "minimum": 1, "maximum": 1000},
+                    "after": {"type": "string"},
+                },
+                ["guild_id"],
+            ),
+            handler=lambda args: service.execute(
+                "list_members",
+                args,
+                lambda payload: service.api.list_members(
+                    require_snowflake(payload, "guild_id"),
+                    limit=optional_integer(payload, "limit", default=100, minimum=1, maximum=1000) or 100,
+                    after=optional_snowflake(payload, "after"),
+                ),
+            ),
+        ),
+        ToolDefinition(
+            name="search_members",
+            title="Search Members",
+            description="Search guild members by username, nickname, or global name prefix.",
+            input_schema=_schema(
+                {
+                    "guild_id": {"type": "string"},
+                    "query": {"type": "string"},
+                    "limit": {"type": "integer", "minimum": 1, "maximum": 1000},
+                },
+                ["guild_id", "query"],
+            ),
+            handler=lambda args: service.execute(
+                "search_members",
+                args,
+                lambda payload: service.api.search_members(
+                    require_snowflake(payload, "guild_id"),
+                    require_string(payload, "query"),
+                    limit=optional_integer(payload, "limit", default=10, minimum=1, maximum=1000) or 10,
+                ),
+            ),
+        ),
+        ToolDefinition(
             name="get_member",
             title="Get Member",
             description="Return details for a guild member.",
@@ -193,7 +257,7 @@ def build_tool_registry(service: DiscordAdminService) -> ToolRegistry:
                 {
                     "guild_id": {"type": "string"},
                     "role_id": {"type": "string"},
-                    "limit": {"type": "integer", "minimum": 1},
+                    "limit": {"type": "integer", "minimum": 1, "maximum": 1000},
                 },
                 ["guild_id", "role_id"],
             ),
@@ -203,7 +267,7 @@ def build_tool_registry(service: DiscordAdminService) -> ToolRegistry:
                 lambda payload: service.api.list_members_by_role(
                     require_snowflake(payload, "guild_id"),
                     require_snowflake(payload, "role_id"),
-                    optional_integer(payload, "limit", default=100, minimum=1) or 100,
+                    optional_integer(payload, "limit", default=100, minimum=1, maximum=1000) or 100,
                 ),
             ),
         ),
@@ -230,11 +294,40 @@ def build_tool_registry(service: DiscordAdminService) -> ToolRegistry:
                 lambda payload: service.api.create_role(
                     require_snowflake(payload, "guild_id"),
                     name=require_string(payload, "name"),
-                    permissions=optional_permissions(payload),
+                    permissions=optional_permissions(payload) or "0",
                     color=optional_integer(payload, "color", default=0, minimum=0) or 0,
                     hoist=optional_boolean(payload, "hoist", default=False),
                     mentionable=optional_boolean(payload, "mentionable", default=False),
                     reason=optional_string(payload, "reason"),
+                ),
+            ),
+        ),
+        ToolDefinition(
+            name="update_role",
+            title="Update Role",
+            description="Update one or more mutable fields on an existing Discord role.",
+            input_schema=_schema(
+                {
+                    "guild_id": {"type": "string"},
+                    "role_id": {"type": "string"},
+                    "name": {"type": "string"},
+                    "permissions": {"type": ["string", "integer"]},
+                    "color": {"type": "integer", "minimum": 0},
+                    "hoist": {"type": "boolean"},
+                    "mentionable": {"type": "boolean"},
+                    "reason": {"type": "string"},
+                    "requested_by": {"type": "string"},
+                },
+                ["guild_id", "role_id"],
+            ),
+            handler=lambda args: service.execute(
+                "update_role",
+                args,
+                lambda payload: service.api.update_role(
+                    require_snowflake(payload, "guild_id"),
+                    require_snowflake(payload, "role_id"),
+                    reason=optional_string(payload, "reason"),
+                    **_role_update_fields(payload),
                 ),
             ),
         ),
@@ -289,6 +382,31 @@ def build_tool_registry(service: DiscordAdminService) -> ToolRegistry:
             ),
         ),
         ToolDefinition(
+            name="create_category",
+            title="Create Category",
+            description="Create a new category channel in a Discord guild.",
+            input_schema=_schema(
+                {
+                    "guild_id": {"type": "string"},
+                    "name": {"type": "string"},
+                    "position": {"type": "integer", "minimum": 0},
+                    "reason": {"type": "string"},
+                    "requested_by": {"type": "string"},
+                },
+                ["guild_id", "name"],
+            ),
+            handler=lambda args: service.execute(
+                "create_category",
+                args,
+                lambda payload: service.api.create_category(
+                    require_snowflake(payload, "guild_id"),
+                    name=require_string(payload, "name"),
+                    position=optional_integer(payload, "position", minimum=0),
+                    reason=optional_string(payload, "reason"),
+                ),
+            ),
+        ),
+        ToolDefinition(
             name="create_text_channel",
             title="Create Text Channel",
             description="Create a text channel, optionally inside a given category.",
@@ -318,6 +436,98 @@ def build_tool_registry(service: DiscordAdminService) -> ToolRegistry:
             ),
         ),
         ToolDefinition(
+            name="rename_channel",
+            title="Rename Channel",
+            description="Rename an existing Discord channel.",
+            input_schema=_schema(
+                {
+                    "channel_id": {"type": "string"},
+                    "name": {"type": "string"},
+                    "reason": {"type": "string"},
+                    "requested_by": {"type": "string"},
+                },
+                ["channel_id", "name"],
+            ),
+            handler=lambda args: service.execute(
+                "rename_channel",
+                args,
+                lambda payload: service.api.rename_channel(
+                    require_snowflake(payload, "channel_id"),
+                    require_string(payload, "name"),
+                    reason=optional_string(payload, "reason"),
+                ),
+            ),
+        ),
+        ToolDefinition(
+            name="set_channel_topic",
+            title="Set Channel Topic",
+            description="Update the topic on an existing Discord text channel.",
+            input_schema=_schema(
+                {
+                    "channel_id": {"type": "string"},
+                    "topic": {"type": "string"},
+                    "reason": {"type": "string"},
+                    "requested_by": {"type": "string"},
+                },
+                ["channel_id", "topic"],
+            ),
+            handler=lambda args: service.execute(
+                "set_channel_topic",
+                args,
+                lambda payload: service.api.set_channel_topic(
+                    require_snowflake(payload, "channel_id"),
+                    require_string(payload, "topic"),
+                    reason=optional_string(payload, "reason"),
+                ),
+            ),
+        ),
+        ToolDefinition(
+            name="lock_channel",
+            title="Lock Channel",
+            description="Deny send-message permissions for selected roles on a channel while preserving prior explicit allows for reversible unlocks.",
+            input_schema=_schema(
+                {
+                    "channel_id": {"type": "string"},
+                    "role_ids": {"type": "array", "items": {"type": "string"}, "minItems": 1},
+                    "reason": {"type": "string"},
+                    "requested_by": {"type": "string"},
+                },
+                ["channel_id"],
+            ),
+            handler=lambda args: service.execute(
+                "lock_channel",
+                args,
+                lambda payload: service.api.lock_channel(
+                    require_snowflake(payload, "channel_id"),
+                    role_ids=optional_nonempty_snowflake_list(payload, "role_ids"),
+                    reason=optional_string(payload, "reason"),
+                ),
+            ),
+        ),
+        ToolDefinition(
+            name="unlock_channel",
+            title="Unlock Channel",
+            description="Clear explicit send-message denies for selected roles on a channel and remove neutral overwrite entries.",
+            input_schema=_schema(
+                {
+                    "channel_id": {"type": "string"},
+                    "role_ids": {"type": "array", "items": {"type": "string"}, "minItems": 1},
+                    "reason": {"type": "string"},
+                    "requested_by": {"type": "string"},
+                },
+                ["channel_id"],
+            ),
+            handler=lambda args: service.execute(
+                "unlock_channel",
+                args,
+                lambda payload: service.api.unlock_channel(
+                    require_snowflake(payload, "channel_id"),
+                    role_ids=optional_nonempty_snowflake_list(payload, "role_ids"),
+                    reason=optional_string(payload, "reason"),
+                ),
+            ),
+        ),
+        ToolDefinition(
             name="archive_channel",
             title="Archive Channel",
             description="Soft-archive a channel by moving it, locking it, and preserving it.",
@@ -326,7 +536,7 @@ def build_tool_registry(service: DiscordAdminService) -> ToolRegistry:
                     "channel_id": {"type": "string"},
                     "archive_category_id": {"type": "string"},
                     "rename_prefix": {"type": "string"},
-                    "lock_role_ids": {"type": "array", "items": {"type": "string"}},
+                    "lock_role_ids": {"type": "array", "items": {"type": "string"}, "minItems": 1},
                     "reason": {"type": "string"},
                     "requested_by": {"type": "string"},
                 },
@@ -339,7 +549,7 @@ def build_tool_registry(service: DiscordAdminService) -> ToolRegistry:
                     require_snowflake(payload, "channel_id"),
                     archive_category_id=require_snowflake(payload, "archive_category_id"),
                     rename_prefix=optional_string(payload, "rename_prefix", default="archived") or "archived",
-                    lock_role_ids=optional_snowflake_list(payload, "lock_role_ids") or None,
+                    lock_role_ids=optional_nonempty_snowflake_list(payload, "lock_role_ids"),
                     reason=optional_string(payload, "reason"),
                 ),
             ),
@@ -364,6 +574,184 @@ def build_tool_registry(service: DiscordAdminService) -> ToolRegistry:
                     require_snowflake(payload, "channel_id"),
                     require_snowflake(payload, "target_category_id"),
                     reason=optional_string(payload, "reason"),
+                ),
+            ),
+        ),
+        ToolDefinition(
+            name="set_member_nickname",
+            title="Set Member Nickname",
+            description="Set a guild member nickname.",
+            input_schema=_schema(
+                {
+                    "guild_id": {"type": "string"},
+                    "user_id": {"type": "string"},
+                    "nickname": {"type": "string"},
+                    "reason": {"type": "string"},
+                    "requested_by": {"type": "string"},
+                },
+                ["guild_id", "user_id", "nickname"],
+            ),
+            handler=lambda args: service.execute(
+                "set_member_nickname",
+                args,
+                lambda payload: service.api.set_member_nickname(
+                    require_snowflake(payload, "guild_id"),
+                    require_snowflake(payload, "user_id"),
+                    require_string(payload, "nickname"),
+                    reason=optional_string(payload, "reason"),
+                ),
+            ),
+        ),
+        ToolDefinition(
+            name="timeout_member",
+            title="Timeout Member",
+            description="Apply a communication timeout to a guild member.",
+            input_schema=_schema(
+                {
+                    "guild_id": {"type": "string"},
+                    "user_id": {"type": "string"},
+                    "duration_minutes": {"type": "integer", "minimum": 1, "maximum": 40320},
+                    "reason": {"type": "string"},
+                    "requested_by": {"type": "string"},
+                },
+                ["guild_id", "user_id", "duration_minutes"],
+            ),
+            handler=lambda args: service.execute(
+                "timeout_member",
+                args,
+                lambda payload: service.api.timeout_member(
+                    require_snowflake(payload, "guild_id"),
+                    require_snowflake(payload, "user_id"),
+                    duration_minutes=require_integer(
+                        payload,
+                        "duration_minutes",
+                        minimum=1,
+                        maximum=40320,
+                    ),
+                    reason=optional_string(payload, "reason"),
+                ),
+            ),
+        ),
+        ToolDefinition(
+            name="clear_member_timeout",
+            title="Clear Member Timeout",
+            description="Remove an active communication timeout from a guild member.",
+            input_schema=_schema(
+                {
+                    "guild_id": {"type": "string"},
+                    "user_id": {"type": "string"},
+                    "reason": {"type": "string"},
+                    "requested_by": {"type": "string"},
+                },
+                ["guild_id", "user_id"],
+            ),
+            handler=lambda args: service.execute(
+                "clear_member_timeout",
+                args,
+                lambda payload: service.api.clear_member_timeout(
+                    require_snowflake(payload, "guild_id"),
+                    require_snowflake(payload, "user_id"),
+                    reason=optional_string(payload, "reason"),
+                ),
+            ),
+        ),
+        ToolDefinition(
+            name="kick_member",
+            title="Kick Member",
+            description="Kick a member from a Discord guild.",
+            input_schema=_schema(
+                {
+                    "guild_id": {"type": "string"},
+                    "user_id": {"type": "string"},
+                    "reason": {"type": "string"},
+                    "requested_by": {"type": "string"},
+                },
+                ["guild_id", "user_id"],
+            ),
+            handler=lambda args: service.execute(
+                "kick_member",
+                args,
+                lambda payload: service.api.kick_member(
+                    require_snowflake(payload, "guild_id"),
+                    require_snowflake(payload, "user_id"),
+                    reason=optional_string(payload, "reason"),
+                ),
+            ),
+        ),
+        ToolDefinition(
+            name="ban_member",
+            title="Ban Member",
+            description="Ban a member from a Discord guild.",
+            input_schema=_schema(
+                {
+                    "guild_id": {"type": "string"},
+                    "user_id": {"type": "string"},
+                    "delete_message_seconds": {"type": "integer", "minimum": 0, "maximum": 604800},
+                    "reason": {"type": "string"},
+                    "requested_by": {"type": "string"},
+                },
+                ["guild_id", "user_id"],
+            ),
+            handler=lambda args: service.execute(
+                "ban_member",
+                args,
+                lambda payload: service.api.ban_member(
+                    require_snowflake(payload, "guild_id"),
+                    require_snowflake(payload, "user_id"),
+                    delete_message_seconds=optional_integer(
+                        payload,
+                        "delete_message_seconds",
+                        default=0,
+                        minimum=0,
+                        maximum=604800,
+                    )
+                    or 0,
+                    reason=optional_string(payload, "reason"),
+                ),
+            ),
+        ),
+        ToolDefinition(
+            name="unban_member",
+            title="Unban Member",
+            description="Remove an existing guild ban for a user.",
+            input_schema=_schema(
+                {
+                    "guild_id": {"type": "string"},
+                    "user_id": {"type": "string"},
+                    "reason": {"type": "string"},
+                    "requested_by": {"type": "string"},
+                },
+                ["guild_id", "user_id"],
+            ),
+            handler=lambda args: service.execute(
+                "unban_member",
+                args,
+                lambda payload: service.api.unban_member(
+                    require_snowflake(payload, "guild_id"),
+                    require_snowflake(payload, "user_id"),
+                    reason=optional_string(payload, "reason"),
+                ),
+            ),
+        ),
+        ToolDefinition(
+            name="export_members_csv",
+            title="Export Members CSV",
+            description="Export a CSV snapshot of guild members, optionally filtered to one role.",
+            input_schema=_schema(
+                {
+                    "guild_id": {"type": "string"},
+                    "role_id": {"type": "string"},
+                    "limit": {"type": "integer", "minimum": 1, "maximum": 1000},
+                },
+                ["guild_id"],
+            ),
+            handler=lambda args: service.execute(
+                "export_members_csv",
+                args,
+                lambda payload: service.api.export_members_csv(
+                    require_snowflake(payload, "guild_id"),
+                    limit=optional_integer(payload, "limit", default=100, minimum=1, maximum=1000) or 100,
+                    role_id=optional_snowflake(payload, "role_id"),
                 ),
             ),
         ),
@@ -393,4 +781,3 @@ def build_tool_registry(service: DiscordAdminService) -> ToolRegistry:
     ]
 
     return ToolRegistry(definitions)
-

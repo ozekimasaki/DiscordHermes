@@ -1,4 +1,4 @@
-"""Pure helpers for channel archive and move policies."""
+"""Pure helpers for channel archive, lock, and move policies."""
 
 from __future__ import annotations
 
@@ -35,7 +35,6 @@ def deny_send_messages(permission_overwrites: Iterable[dict[str, Any]], role_ids
         if overwrite_id in target_ids and overwrite_type == ROLE_OVERWRITE_TYPE:
             allow_bits = int(str(copied.get("allow", "0")))
             deny_bits = int(str(copied.get("deny", "0")))
-            allow_bits &= ~SEND_MESSAGES_PERMISSION
             deny_bits |= SEND_MESSAGES_PERMISSION
             copied["allow"] = str(allow_bits)
             copied["deny"] = str(deny_bits)
@@ -56,6 +55,50 @@ def deny_send_messages(permission_overwrites: Iterable[dict[str, Any]], role_ids
     return updated
 
 
+def clear_send_messages(permission_overwrites: Iterable[dict[str, Any]], role_ids: Iterable[str]) -> list[dict[str, Any]]:
+    """Clear explicit SEND_MESSAGES deny bits for selected roles."""
+
+    target_ids = {str(role_id) for role_id in role_ids}
+    updated: list[dict[str, Any]] = []
+
+    for overwrite in permission_overwrites:
+        copied = dict(overwrite)
+        overwrite_id = str(copied.get("id", ""))
+        overwrite_type = int(copied.get("type", ROLE_OVERWRITE_TYPE))
+
+        if overwrite_id in target_ids and overwrite_type == ROLE_OVERWRITE_TYPE:
+            allow_bits = int(str(copied.get("allow", "0")))
+            deny_bits = int(str(copied.get("deny", "0")))
+            copied["allow"] = str(allow_bits)
+            copied["deny"] = str(deny_bits & ~SEND_MESSAGES_PERMISSION)
+            if copied["allow"] == "0" and copied["deny"] == "0":
+                continue
+
+        updated.append(copied)
+
+    return updated
+
+
+def build_channel_lock_patch(channel: dict[str, Any], lock_role_ids: list[str] | None = None) -> dict[str, Any]:
+    """Build the PATCH payload for a channel lock operation."""
+
+    guild_id = str(channel["guild_id"])
+    effective_role_ids = lock_role_ids or [guild_id]
+    return {
+        "permission_overwrites": deny_send_messages(channel.get("permission_overwrites", []), effective_role_ids),
+    }
+
+
+def build_channel_unlock_patch(channel: dict[str, Any], unlock_role_ids: list[str] | None = None) -> dict[str, Any]:
+    """Build the PATCH payload for a channel unlock operation."""
+
+    guild_id = str(channel["guild_id"])
+    effective_role_ids = unlock_role_ids or [guild_id]
+    return {
+        "permission_overwrites": clear_send_messages(channel.get("permission_overwrites", []), effective_role_ids),
+    }
+
+
 def build_archive_patch(
     channel: dict[str, Any],
     archive_category_id: str,
@@ -64,12 +107,12 @@ def build_archive_patch(
 ) -> dict[str, Any]:
     """Build the PATCH payload for a soft archive operation."""
 
-    guild_id = str(channel["guild_id"])
-    effective_role_ids = lock_role_ids or [guild_id]
-    patch = {
+    patch = build_channel_lock_patch(channel, lock_role_ids)
+    patch.update(
+        {
         "parent_id": archive_category_id,
-        "permission_overwrites": deny_send_messages(channel.get("permission_overwrites", []), effective_role_ids),
-    }
+        }
+    )
 
     current_name = str(channel.get("name", "channel"))
     new_name = prefixed_channel_name(current_name, rename_prefix)

@@ -12,14 +12,30 @@ It keeps Hermes upstream untouched and adds:
 
 ## Scope
 
-The current MVP focuses on four Discord admin actions:
+The current admin surface is MCP-first and focuses on Discord management workflows that Hermes can invoke safely:
 
-- role management
-- channel creation
-- channel archiving
-- channel moves between categories
+- guild, category, channel, role, and member inspection
+- role lifecycle updates
+- category and text channel creation
+- channel rename/topic/lock/archive/move workflows
+- member moderation helpers such as nickname updates, timeouts, and explicit kick/ban/unban actions
+- one-shot export/report helpers such as member CSV export
 
 `archive_channel` is intentionally defined as **move + lock + preserve**, not delete.
+
+This extension does **not** introduce persistent jobs such as reminders or watch loops. It is intentionally focused on synchronous Discord administration.
+
+## Current tool families
+
+The current MCP surface is organized around a few operator-facing groups:
+
+- inspection: guild, category, channel, role, and member lookups
+- channel management: create category, create channel, rename, topic updates, move, lock, unlock, archive
+- role management: create, update, assign, remove
+- member administration: search, nickname update, timeout/clear timeout, kick, ban, unban
+- reporting: member CSV export and announcement posting
+
+Destructive actions are exposed as explicit tools rather than hidden behind broad generic commands, and successful or failed write actions are audit-logged.
 
 ## Layout
 

@@ -40,6 +40,23 @@ def require_string(arguments: dict[str, Any], key: str) -> str:
     return value.strip()
 
 
+def require_integer(
+    arguments: dict[str, Any],
+    key: str,
+    *,
+    minimum: int | None = None,
+    maximum: int | None = None,
+) -> int:
+    value = arguments.get(key)
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise ValidationError(f"{key} must be an integer.")
+    if minimum is not None and value < minimum:
+        raise ValidationError(f"{key} must be >= {minimum}.")
+    if maximum is not None and value > maximum:
+        raise ValidationError(f"{key} must be <= {maximum}.")
+    return value
+
+
 def optional_string(arguments: dict[str, Any], key: str, default: str | None = None) -> str | None:
     value = arguments.get(key)
     if value is None:
@@ -59,22 +76,30 @@ def optional_boolean(arguments: dict[str, Any], key: str, default: bool = False)
 
 
 def optional_integer(
-    arguments: dict[str, Any], key: str, default: int | None = None, minimum: int | None = None
+    arguments: dict[str, Any],
+    key: str,
+    default: int | None = None,
+    minimum: int | None = None,
+    maximum: int | None = None,
 ) -> int | None:
     value = arguments.get(key)
     if value is None:
         return default
-    if not isinstance(value, int):
+    if isinstance(value, bool) or not isinstance(value, int):
         raise ValidationError(f"{key} must be an integer.")
     if minimum is not None and value < minimum:
         raise ValidationError(f"{key} must be >= {minimum}.")
+    if maximum is not None and value > maximum:
+        raise ValidationError(f"{key} must be <= {maximum}.")
     return value
 
 
-def optional_permissions(arguments: dict[str, Any], key: str = "permissions", default: str = "0") -> str:
+def optional_permissions(arguments: dict[str, Any], key: str = "permissions", default: str | None = "0") -> str | None:
     value = arguments.get(key)
     if value is None:
         return default
+    if isinstance(value, bool):
+        raise ValidationError(f"{key} must be a non-negative integer or digit string.")
     if isinstance(value, int):
         if value < 0:
             raise ValidationError(f"{key} must be >= 0.")
@@ -99,5 +124,15 @@ def optional_snowflake_list(arguments: dict[str, Any], key: str) -> list[str]:
         if not _SNOWFLAKE_RE.match(text):
             raise ValidationError(f"{key} must only contain valid Discord snowflakes.")
         validated.append(text)
+    return validated
+
+
+def optional_nonempty_snowflake_list(arguments: dict[str, Any], key: str) -> list[str] | None:
+    if key not in arguments or arguments.get(key) is None:
+        return None
+
+    validated = optional_snowflake_list(arguments, key)
+    if not validated:
+        raise ValidationError(f"{key} must not be an empty array.")
     return validated
 
